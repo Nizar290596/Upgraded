@@ -1,0 +1,19 @@
+flowchart TD
+    A[runTime++] --> B[rhoEqn — continuity]
+    B --> C{PIMPLE loop}
+    C --> D[UEqn — momentum predictor]
+    D --> E["evaluateLaplacian<br/>uPrime = 2 |delta^3 curl(laplaceSim)|<br/>uPrimek = sqrt(2/3 k_sgs)"]
+    E --> F["Wrinkling factor<br/>RL = delta/deltal0,  RV = u'/sl0<br/>fu, fdelta, fre, Resgs, a_vb -> gammafit<br/>vb = (1 + min(RL, gammafit·RV))^gamma"]
+    F --> G[D, Dt, DEff — diffusivities]
+    G --> H[XiEqn — MMC ref vars z, sPx, sPy, sPz]
+    H --> I["hYEqvE_Eqn<br/>Yi + hEqvE relaxed to cloud targets / tauRel"]
+    I --> J[Pressure corrector loop<br/>pEqn -> phi, U, K, dpdt]
+    J --> K[turbulence.correct]
+    K -->|not converged| C
+    K -->|PIMPLE done| L["rho = thermo.rho<br/>gradRho = grad(rho · DEff)"]
+    L --> M{pdfMethodOn?}
+    M -->|yes| N["moveParticles<br/>1. inflow injection<br/>2. first-conditioning Smix<br/>3. updatePhiReaction (Δt) ┐<br/>4. updateOUProcess (Δt) │ if secondCond<br/>5. secondCondMixing.Smix ┘<br/>6. solve — Lagrangian transport<br/>7. Sreact — balanced chemistry<br/>8. particleSampling"]
+    M -->|no| O[skip particle step]
+    N --> P[runTime.write]
+    O --> P
+    P -->|runTime.run| A

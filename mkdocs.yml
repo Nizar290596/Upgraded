@@ -7,6 +7,9 @@ nav:
         - How to contribute: howToContribute.md
         - How to add a submodule: howToAddSubmodule.md
         - Code structure: codeOverview.md
+    - Solvers:
+        - SPFoam: SPFoam.md
+        - mmcDNSFoam: mmcDNSFoam.md
     - About:
         - Publication Log: publication_log.md
 
