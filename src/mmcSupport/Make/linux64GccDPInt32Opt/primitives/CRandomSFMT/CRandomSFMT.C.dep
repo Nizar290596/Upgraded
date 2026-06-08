@@ -1,0 +1,6 @@
+$(OBJECTS_DIR)/primitives/CRandomSFMT/CRandomSFMT.C.dep: \
+primitives/CRandomSFMT/CRandomSFMT.C \
+primitives/CRandomSFMT/CRandomSFMT.H \
+primitives/CRandomSFMT/randomc.h \
+
+#END
