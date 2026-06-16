@@ -73,15 +73,34 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
 {
     particleList_.clear();
 
+    const bool filterFlagged = this->owner().secondCondMixingEnabled();
+
+    // Number of particles actually used to build the kernel. With the
+    // second-conditioning subset active only flagged particles are kept, so the
+    // down-sampling probability must be based on the flagged count: using the
+    // full cloud size would thin the subset by an extra factor of
+    // nFlagged/nTotal and starve the kernel, re-creating sparse coupling holes.
     scalar nParticles = this->owner().size();
+    if (filterFlagged)
+    {
+        label nFlagged = 0;
+        forAllIters(this->owner(), iter)
+        {
+            if (iter().secondCondFlag() == 1) ++nFlagged;
+        }
+        nParticles = nFlagged;
+    }
+
     scalar nLESCells  = mesh_.cells().size();
-    scalar prob       = 1. - (0.5*nLESCells/nParticles);
+    scalar prob       = (nParticles > nLESCells)
+                      ? 1. - (0.5*nLESCells/nParticles)
+                      : 0.0;
 
     forAllIters(this->owner(), iter)
     {
 		// When second conditioning is active, exclude non-subset particles —
         // their Y and T are stale and must not bias the Eulerian target fields.
-        if (this->owner().secondCondMixingEnabled() && iter().secondCondFlag() != 1)
+        if (filterFlagged && iter().secondCondFlag() != 1)
             continue;
 		
         densParticle p(numP_);
@@ -289,7 +308,7 @@ void Foam::KernelEstimation<CloudType>::computeTargets
         if (mag(df) >= DELTAf || dd >= DELTAd || computedLES == 0)
         {
             //- Find the k-nn particles to compute kernel !!!!!!!!
-            label nn = 20;//50;
+            const label nn = nNearest_;
             scalarList qv(4); //coupling var + 3 dimensions
 
             qv[0] = cCentre[0];
@@ -302,6 +321,14 @@ void Foam::KernelEstimation<CloudType>::computeTargets
                 qv,             // query vector (x,y,z,XiC)
                 nn              // number of nearest neighbours
             );
+
+            // The tree returns at most nn neighbours (fewer when the flagged
+            // subset is smaller than nn); guard against an empty/short result
+            // before sizing the kernel from result.begin() and looping.
+            if (result.empty())
+                continue;
+
+            const label nFound = min(nn, label(result.size()));
 
             //- Define kernel radius in physical space based on k-NN
 
@@ -328,7 +355,7 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             scalar alpha   = 1.0/6.0/h;
             scalar alpha2  = alpha/(0.5*h);
 
-            for(label nni = 0; nni < nn; nni++)
+            for(label nni = 0; nni < nFound; nni++)
             {
                 const densParticle& p = particleList_(result[nni].idx);
 
@@ -493,6 +520,22 @@ void Foam::KernelEstimation<CloudType>::computeTargets
     YEqvETarget[N2Index] = scalar(1) - Yt;
     YEqvETarget[N2Index].max(0.0);
 
+    // Coupling-coverage diagnostic: fraction of cells that received a Lagrangian
+    // target (Indicator==1). With the kernel estimator this should stay high even
+    // for the sparse flagged subset, unlike ParticleInCell which leaves a hole
+    // wherever a flagged particle is absent from the cell.
+    {
+        const scalar nCov =
+            returnReduce(sum(this->Indicator().primitiveField()), sumOp<scalar>());
+        const label nTot =
+            returnReduce(this->Indicator().size(), sumOp<label>());
+        const label nP = returnReduce(particleList_.size(), sumOp<label>());
+
+        Info<< "KernelEstimation coupling: " << label(nCov) << "/" << nTot
+            << " cells covered (" << 100.0*nCov/max(nTot, 1) << "%), "
+            << nP << " particles in kernel list" << endl;
+    }
+
     if (debug_)
     {
         Pstream::gather(computedLES,sumOp<label>());
@@ -545,6 +588,8 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
     fm_(readScalar(this->coeffDict().lookup("fm"))),
 
     rMaxMax_(this->coeffDict().lookupOrDefault("rMax", 1.0e9)),
+
+    nNearest_(this->coeffDict().lookupOrDefault<label>("nNearest", 20)),
 
     particleList_(),
 

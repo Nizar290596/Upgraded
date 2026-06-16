@@ -66,6 +66,11 @@ flowchart TD
    with `tauRel` blending from `tauRelaxStart` toward `tauRelaxTarget` (linear in time-step count, see `XiEqn.H`).
 3. The updated Eulerian `U`, `rho`, `DEff`, `gradRho` are passed back to the cloud through the constructor references and used to advance the particles in the next step.
 
+`EqvETargetValues` is supplied by the selected `thermoPhysicalCouplingModel`:
+
+- **`ParticleInCell`** — local: averages particles within each super-cell; `Indicator=0` (source off) wherever a super-cell holds no contributing particle.
+- **`KernelEstimation`** — non-local: for each cell it kernel-weights the `nNearest` particles in (x, y, z, mixture-fraction) space, so cells without a local particle still receive a target. This suits the second-conditioning **flagged subset** (sparse particles): the subset filter plus a flagged-count–calibrated down-sampling keep coverage (`Indicator=1`) high; `Indicator=0` only outside `[fLow, fHigh]` or where the kernel has no support. Set `fLow/fHigh` to bracket the flagged subset's mixture-fraction band.
+
 ## MMC reference variables
 
 Defined in `mmcVariablesDefinitions`:

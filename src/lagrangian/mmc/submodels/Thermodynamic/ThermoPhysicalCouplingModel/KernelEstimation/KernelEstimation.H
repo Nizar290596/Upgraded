@@ -125,6 +125,9 @@ class KernelEstimation
         const scalar fm_;
         const scalar rMaxMax_;
 
+        //- Number of nearest neighbours used to build each cell kernel
+        const label nNearest_;
+
         DynamicList<densParticle>  particleList_;
         DynamicList<densParticle>  LESList_;
 

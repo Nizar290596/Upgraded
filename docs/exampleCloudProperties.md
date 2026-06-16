@@ -155,7 +155,11 @@ subModels
         dfMax               0.015;  // maximum distance in f space allowed to do extrapolation
         C2                  0.1;    // used to control resolution
 
-        nElements           25;
+        nNearest            20;     // k nearest particles per cell kernel (default 20)
+        rMax                1e9;    // cap on physical kernel radius [m] (default 1e9)
+
+        // With second conditioning enabled the kernel is built from the flagged
+        // subset only; fLow/fHigh must bracket that subset's mixture-fraction band.
     }
 
 
