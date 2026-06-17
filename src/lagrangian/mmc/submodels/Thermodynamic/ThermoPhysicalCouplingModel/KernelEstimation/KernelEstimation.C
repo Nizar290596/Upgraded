@@ -662,7 +662,7 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     rMaxMax_(this->coeffDict().lookupOrDefault("rMax", 1.0e9)),
 
-    nNearest_(this->coeffDict().lookupOrDefault<label>("nNearest", 20)),
+    nNearest_(this->coeffDict().lookupOrDefault("nNearest", label(20))),
 
     particleList_(),
 
