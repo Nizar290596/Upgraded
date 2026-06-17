@@ -60,13 +60,89 @@ void Foam::KernelEstimation<CloudType>::buildLESParticleList()
 
         forAllConstIter(wordList,this->XiCNames(), nameI)
         {
-            p[nXiCs_ +  pfieldIndexes[*nameI]] =
-                this->XiC().Vars(fieldIndexes[*nameI]).field()[celli];
+            const label slot = pfieldIndexes[*nameI];
+
+            // In phi-degree mode the carrier slot holds the per-cell projected
+            // phi-degree instead of the registered Eulerian coupling value.
+            p[nXiCs_ + slot] =
+                (phiModEnabled_ && slot == condSlotXiC_)
+              ? phiModCell_()[celli]
+              : this->XiC().Vars(fieldIndexes[*nameI]).field()[celli];
         }
 
         LESList_[celli] = p;
     }
 }
+
+template <class CloudType>
+void Foam::KernelEstimation<CloudType>::buildPhiModCell()
+{
+    // Project the (flagged) particles' modified progress variable phi-degree
+    // onto the mesh as the per-cell conditioning coordinate. phi-degree is a
+    // particle-only quantity, so without this projection the kernel would have
+    // no cell value to condition on. Super-cells are used (as in
+    // ParticleInCell) so the field is defined wherever a flagged particle
+    // exists in the super-cell; cells with no flagged particle keep the
+    // sentinel -1 and are skipped by the [fLow,fHigh] gate in computeTargets.
+    phiModCell_.reset
+    (
+        new volScalarField
+        (
+            IOobject
+            (
+                "phiModCell",
+                mesh_.time().timeName(),
+                mesh_,
+                IOobject::NO_READ,
+                IOobject::NO_WRITE
+            ),
+            mesh_,
+            dimensionedScalar("phiModCell", dimless, -1.0)
+        )
+    );
+
+    scalarField& pm = phiModCell_->primitiveFieldRef();
+
+    const bool filterFlagged = this->owner().secondCondMixingEnabled();
+
+    const auto& pManager = this->owner().pManager();
+
+    auto cellParticlesInSuperCell =
+        pManager.getParticlesInSuperCellList(this->owner());
+
+    const auto& superCellCells = pManager.cellsInSuperCell();
+
+    for
+    (
+        label superCelli = 0;
+        superCelli < pManager.nSuperCells();
+        ++superCelli
+    )
+    {
+        const DynamicList<particleType*>& cellParticles =
+            cellParticlesInSuperCell[superCelli];
+
+        scalar sumWt    = 0.0;
+        scalar sumPhiWt = 0.0;
+
+        for (particleType* pPtr : cellParticles)
+        {
+            if (filterFlagged && pPtr->secondCondFlag() != 1) continue;
+
+            const scalar w = pPtr->wt();
+            sumWt    += w;
+            sumPhiWt += w * pPtr->phiModified();
+        }
+
+        if (sumWt > SMALL)
+        {
+            const scalar mean = sumPhiWt/sumWt;
+            for (const label celli : superCellCells[superCelli])
+                pm[celli] = mean;
+        }
+    }
+}
+
 
 template <class CloudType>
 void Foam::KernelEstimation<CloudType>::buildParticleList()
@@ -122,9 +198,16 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
         //- Coupling(state) Variables
         forAll(iter().XiC(), j)
         {
-            p[nXiCs_ + j] = iter().XiC()[j];
-            maxXiCVal_[j] = max(maxXiCVal_[j],iter().XiC()[j]);
-            minXiCVal_[j] = min(minXiCVal_[j],iter().XiC()[j]);
+            // In phi-degree mode the carrier slot holds phiModified() so the
+            // kd-tree conditions on the modified progress variable.
+            const scalar val =
+                (phiModEnabled_ && j == condSlotXiC_)
+              ? iter().phiModified()
+              : iter().XiC()[j];
+
+            p[nXiCs_ + j] = val;
+            maxXiCVal_[j] = max(maxXiCVal_[j], val);
+            minXiCVal_[j] = min(minXiCVal_[j], val);
         }
 
         //- Min and Max of temperature
@@ -178,17 +261,22 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             N2Index = specieI;
     }
 
-    //- Index of coupling variable used
-        const label CVIndexinXiC = nXiCs_ + XiC.cVarInXiC()[this->cVarName()];
+    //- Index of conditioning variable used (carrier slot; in phi-degree mode
+    //- the first coupling variable's slot carries the conditioning value)
+    const label CVIndexinXiC = nXiCs_ + condSlotXiC_;
+    const label CVIndexinXi  = condSlotXi_;
 
-    //- Min and Max values of the coupling variable
-    const label CVIndexinXi = XiC.cVarInXi()[this->cVarName()];
+    //- LES field of the conditioning variable: the projected phi-degree field
+    //- in phi-degree mode, otherwise the registered Eulerian coupling field.
+    const volScalarField& f =
+        phiModEnabled_ ? phiModCell_() : XiC.Vars(CVIndexinXi).field();
 
-    scalar minf = min(XiC.Vars(CVIndexinXi).field().primitiveField());
-    scalar maxf = max(XiC.Vars(CVIndexinXi).field().primitiveField());
+    //- Min and Max values of the conditioning variable
+    scalar minf = min(f.primitiveField());
+    scalar maxf = max(f.primitiveField());
 
-    scalar minz = minXiCVal_[XiC.cVarInXiC()[this->cVarName()]];
-    scalar maxz = maxXiCVal_[XiC.cVarInXiC()[this->cVarName()]];
+    scalar minz = minXiCVal_[condSlotXiC_];
+    scalar maxz = maxXiCVal_[condSlotXiC_];
 
     if (debug_)
         Info << "max and min values of couplingVar in LES are: "
@@ -251,9 +339,6 @@ void Foam::KernelEstimation<CloudType>::computeTargets
 
     //- Field with cell centres
     vectorField cellCentres = mesh_.C().internalField();
-
-    //- LES field of coupling variable
-    const volScalarField& f = XiC.Vars(CVIndexinXi).field();//
 
     volVectorField gradf = fvc::grad(f);
 
@@ -601,7 +686,15 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     C2_(readScalar(this->coeffDict().lookup("C2"))),
 
-    debug_(this->coeffDict().lookupOrDefault("debug",false)) //Define from dictionary
+    debug_(this->coeffDict().lookupOrDefault("debug",false)), //Define from dictionary
+
+    phiModEnabled_(false),
+
+    condSlotXiC_(0),
+
+    condSlotXi_(0),
+
+    phiModCell_(nullptr)
 {
     forAll(this->solveEqvSpecie(), i)
     {
@@ -629,6 +722,29 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
              << "The indices of the equivalents species are: "
              << Yindexes_ << endl;
     Info << "maximum rMax is: " << rMaxMax_ << endl;
+
+    // Optional conditioning on the modified progress variable phi-degree.
+    // phi-degree (phiModified) is a particle-only quantity with no Eulerian
+    // field, so the first registered coupling variable's array slot is reused
+    // as the carrier for the conditioning value and a per-cell phi-degree is
+    // projected from the flagged particles each step (buildPhiModCell()).
+    phiModEnabled_ = (this->cVarName() == "phiModified");
+
+    if (phiModEnabled_ && this->XiCNames().empty())
+        FatalErrorInFunction
+            << "condVariable 'phiModified' requires at least one registered "
+            << "coupling variable to carry the conditioning slot." << nl
+            << exit(FatalError);
+
+    const word condName =
+        phiModEnabled_ ? this->XiCNames()[0] : this->cVarName();
+
+    condSlotXiC_ = this->XiC().cVarInXiC()[condName];
+    condSlotXi_  = this->XiC().cVarInXi()[condName];
+
+    if (phiModEnabled_)
+        Info<< "KernelEstimation: conditioning on phiModified (phi-degree), "
+            << "carrier coupling slot '" << condName << "'" << endl;
 }
 
 
@@ -648,6 +764,11 @@ void Foam::KernelEstimation<CloudType>::EqvETargetValues
     volScalarField& TEqvETarget
 )
 {
+    //- In phi-degree mode, project the flagged particles' phi-degree onto the
+    //- mesh first: it is the per-cell conditioning coordinate the kernel needs.
+    if (phiModEnabled_)
+        buildPhiModCell();
+
     //- Create lists
     buildParticleList();
 

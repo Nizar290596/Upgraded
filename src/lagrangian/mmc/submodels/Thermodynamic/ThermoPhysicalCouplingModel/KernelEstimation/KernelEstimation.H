@@ -147,8 +147,25 @@ class KernelEstimation
 
         Switch debug_;
 
+        //- Condition on the modified progress variable phi-degree (a
+        //  particle-only quantity) instead of a registered Eulerian coupling
+        //  field. Enabled when condVariable == "phiModified".
+        bool phiModEnabled_;
+
+        //- Array slot of the carrier coupling variable whose position is reused
+        //  to hold the conditioning value (in the XiC subset and full Xi set).
+        label condSlotXiC_;
+        label condSlotXi_;
+
+        //- Per-cell phi-degree projected from the flagged particles; only
+        //  built/used in phiModEnabled_ mode.
+        autoPtr<volScalarField> phiModCell_;
+
         void buildParticleList();
         void buildLESParticleList();
+
+        //- Project the flagged particles' phi-degree onto the mesh
+        void buildPhiModCell();
 
         void computeTargets
         (

@@ -260,6 +260,12 @@ public:
             //  flag. Always returns 0 (not in the subset).
             inline label secondCondFlag() const { return 0; }
 
+            //- Modified progress variable (phi-degree) stub.
+            //  Real value lives on MixingPopeParticle; this base-layer stub
+            //  lets generic templates (e.g. ThermoPhysicalCouplingModel)
+            //  reference it on particle types that do not carry it.
+            inline scalar phiModified() const { return 0.0; }
+
             //- Return const access to total enthalpy
             inline const scalar& hA() const;
             

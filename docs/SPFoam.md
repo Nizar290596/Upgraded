@@ -69,7 +69,8 @@ flowchart TD
 `EqvETargetValues` is supplied by the selected `thermoPhysicalCouplingModel`:
 
 - **`ParticleInCell`** — local: averages particles within each super-cell; `Indicator=0` (source off) wherever a super-cell holds no contributing particle.
-- **`KernelEstimation`** — non-local: for each cell it kernel-weights the `nNearest` particles in (x, y, z, mixture-fraction) space, so cells without a local particle still receive a target. This suits the second-conditioning **flagged subset** (sparse particles): the subset filter plus a flagged-count–calibrated down-sampling keep coverage (`Indicator=1`) high; `Indicator=0` only outside `[fLow, fHigh]` or where the kernel has no support. Set `fLow/fHigh` to bracket the flagged subset's mixture-fraction band.
+- **`KernelEstimation`** — non-local: for each cell it kernel-weights the `nNearest` particles in (x, y, z, conditioning-variable) space, so cells without a local particle still receive a target. This suits the second-conditioning **flagged subset** (sparse particles): the subset filter keeps every flagged particle (no down-sampling), so coverage (`Indicator=1`) stays high; `Indicator=0` only outside `[fLow, fHigh]` or where the kernel has no support. Set `fLow/fHigh` to bracket the flagged subset's conditioning-variable band.
+  - **Conditioning variable.** By default the kernel conditions on the resolved mixture fraction (`condVariable z`/`f`). Set `condVariable phiModified` to condition on the reaction-progress variable φ° instead. φ° is a particle-only quantity, so the model first projects the flagged particles' φ° onto the mesh (a super-cell weighted mean) and conditions on that field; cells whose super-cell holds no flagged particle keep a sentinel and stay uncoupled (coverage bounded by the flagged support).
 
 ## MMC reference variables
 
