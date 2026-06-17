@@ -66,24 +66,37 @@ subModels
     printMoleFractions false;
     
     thermoPhysicalCouplingModel FlameletCurves;
-    //thermoPhysicalCouplingModel KernelEstimation; // Under development
-    
+    //thermoPhysicalCouplingModel KernelEstimation;
+    //
+    // NOTE: this case runs the mixing-model test harness (application test.exe),
+    // not SPFoam, so the coupling block below is NOT exercised at run time — it is
+    // a reference configuration. Copy it into an SPFoam case to use it.
+
     KernelEstimationCoeffs
     {
-        fLow                0.03;   //lower flamability limit
-        fHigh               0.19;   //upper flamability limit
-        fm                  0.01;   //same as in mixing model
-        
-        condVariable        f;
-        dfMax               0.0075; //Maximum distance in f space allowed to do extrapolation            
-        C2                  0.1;    //used to control resolution
+        // --- k-NN kernel controls (apply in either conditioning mode) ---
+        nNearest            20;     // flagged particles per cell kernel (default 20)
+        rMax                1e9;    // physical kernel-radius cap [m] (1e9 = uncapped)
+        dfMax               0.0;    // 0 -> always recompute (no extrapolation reuse; safest)
+        C2                  0.1;    // extrapolation resolution control
+        debug               false;
 
-        nNearest            20;     // k nearest (flagged) particles per cell kernel
-        rMax                1e9;    // cap on physical kernel radius [m]
+        // --- Conditioning band, in the units of condVariable
+        //     (condVariable is set in the thermophysicalCoupling dict below) ---
 
-        // NOTE: with second conditioning enabled the kernel is built from the
-        // flagged subset only. fLow/fHigh MUST bracket the mixture-fraction band
-        // of that subset, otherwise the relaxation source is switched off there.
+        // (a) condVariable z  (mixture fraction) - no second conditioning needed:
+        fLow                0.03;   // lower flammability limit
+        fHigh               0.19;   // upper flammability limit
+        fm                  0.01;   // conditioning-space bandwidth (acceptance window = +/-0.5*fm)
+
+        // (b) condVariable phiModified  (progress variable phi-degree) - REQUIRES a
+        //     secondConditioning block: phi-degree has no Eulerian field and is
+        //     projected from the flagged subset. phi-degree = phi*exp(beta*omegaOU)
+        //     ~ [0, ~1.6], so use a phi-degree band and a WIDER bandwidth to span
+        //     the OU fluctuation (~ beta*sigma_omega). E.g. with beta = 0.15:
+        //         fLow 0.0;   fHigh 2.0;   fm 0.3;
+        //     fLow 0 also drops the no-flagged-particle sentinel (-1). Watch the
+        //     "KernelEstimation coupling: X/Y cells covered" line to tune fm.
     }
 
     mixingModel	    MMCcurl;
