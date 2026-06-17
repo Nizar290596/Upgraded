@@ -75,26 +75,14 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
 
     const bool filterFlagged = this->owner().secondCondMixingEnabled();
 
-    // Number of particles actually used to build the kernel. With the
-    // second-conditioning subset active only flagged particles are kept, so the
-    // down-sampling probability must be based on the flagged count: using the
-    // full cloud size would thin the subset by an extra factor of
-    // nFlagged/nTotal and starve the kernel, re-creating sparse coupling holes.
-    scalar nParticles = this->owner().size();
-    if (filterFlagged)
-    {
-        label nFlagged = 0;
-        forAllIters(this->owner(), iter)
-        {
-            if (iter().secondCondFlag() == 1) ++nFlagged;
-        }
-        nParticles = nFlagged;
-    }
-
-    scalar nLESCells  = mesh_.cells().size();
-    scalar prob       = (nParticles > nLESCells)
-                      ? 1. - (0.5*nLESCells/nParticles)
-                      : 0.0;
+    // Down-sampling (to ~0.5*nCells particles) is only applied to the full
+    // cloud. With the second-conditioning subset active EVERY flagged particle
+    // is kept: the subset is already reduced and thinning it would re-introduce
+    // the sparse coupling holes we are trying to avoid.
+    const scalar nParticles = this->owner().size();
+    const scalar nLESCells  = mesh_.cells().size();
+    const bool   subSample  = (!filterFlagged) && (nParticles > nLESCells);
+    const scalar prob       = subSample ? 1. - (0.5*nLESCells/nParticles) : 0.0;
 
     forAllIters(this->owner(), iter)
     {
@@ -143,7 +131,7 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
         maxVal_[numYEqv_] = max(maxVal_[numYEqv_],iter().T());
         minVal_[numYEqv_] = min(minVal_[numYEqv_],iter().T());
 
-        if(nParticles > nLESCells)
+        if (subSample)
         {
             if (this->owner().rndGen().Random() >= prob)
                 particleList_.append(p);
