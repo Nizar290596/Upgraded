@@ -92,13 +92,14 @@ subModels
         // (b) phi-degree conditioning - keep condVariable a coupling variable
         //     (z) and add  conditionOnPhiModified true;  here (do NOT set
         //     condVariable phiModified - it is also used by the chemistry and
-        //     would throw "phiModified not found in table"). REQUIRES a
-        //     secondConditioning block: phi-degree has no Eulerian field and is
-        //     projected from the flagged subset. phi-degree = phi*exp(beta*omegaOU)
-        //     ~ [0, ~1.6], so use a phi-degree band and a WIDER bandwidth to span
-        //     the OU fluctuation (~ beta*sigma_omega). E.g. with beta = 0.15:
+        //     would throw "phiModified not found in table"). Also add a
+        //     non-passive "phiModEul" couplingVar to mmcVariablesDefinitions:
+        //     XiEqn relaxes that Eulerian field toward the particle-projected
+        //     phi-degree (phi*exp(beta*omegaOU) ~ [0, ~1.6]) and the kernel
+        //     conditions on it. Use a phi-degree band + wider bandwidth, e.g.
+        //     with beta = 0.15:
         //         conditionOnPhiModified true;  fLow 0.0;  fHigh 2.0;  fm 0.3;
-        //     fLow 0 also drops the no-flagged-particle sentinel (-1). Watch the
+        //     Requires second conditioning enabled. Watch the
         //     "KernelEstimation coupling: X/Y cells covered" line to tune fm.
     }
 

@@ -60,89 +60,16 @@ void Foam::KernelEstimation<CloudType>::buildLESParticleList()
 
         forAllConstIter(wordList,this->XiCNames(), nameI)
         {
-            const label slot = pfieldIndexes[*nameI];
-
-            // In phi-degree mode the carrier slot holds the per-cell projected
-            // phi-degree instead of the registered Eulerian coupling value.
-            p[nXiCs_ + slot] =
-                (phiModEnabled_ && slot == condSlotXiC_)
-              ? phiModCell_()[celli]
-              : this->XiC().Vars(fieldIndexes[*nameI]).field()[celli];
+            // In phi-degree mode the conditioning slot is "phiModEul", whose
+            // field is the transported Eulerian phi-degree (relaxed toward the
+            // particle projection in XiEqn) - used here via the normal lookup.
+            p[nXiCs_ +  pfieldIndexes[*nameI]] =
+                this->XiC().Vars(fieldIndexes[*nameI]).field()[celli];
         }
 
         LESList_[celli] = p;
     }
 }
-
-template <class CloudType>
-void Foam::KernelEstimation<CloudType>::buildPhiModCell()
-{
-    // Project the (flagged) particles' modified progress variable phi-degree
-    // onto the mesh as the per-cell conditioning coordinate. phi-degree is a
-    // particle-only quantity, so without this projection the kernel would have
-    // no cell value to condition on. Super-cells are used (as in
-    // ParticleInCell) so the field is defined wherever a flagged particle
-    // exists in the super-cell; cells with no flagged particle keep the
-    // sentinel -1 and are skipped by the [fLow,fHigh] gate in computeTargets.
-    phiModCell_.reset
-    (
-        new volScalarField
-        (
-            IOobject
-            (
-                "phiModCell",
-                mesh_.time().timeName(),
-                mesh_,
-                IOobject::NO_READ,
-                IOobject::NO_WRITE
-            ),
-            mesh_,
-            dimensionedScalar("phiModCell", dimless, -1.0)
-        )
-    );
-
-    scalarField& pm = phiModCell_->primitiveFieldRef();
-
-    const bool filterFlagged = this->owner().secondCondMixingEnabled();
-
-    const auto& pManager = this->owner().pManager();
-
-    auto cellParticlesInSuperCell =
-        pManager.getParticlesInSuperCellList(this->owner());
-
-    const auto& superCellCells = pManager.cellsInSuperCell();
-
-    for
-    (
-        label superCelli = 0;
-        superCelli < pManager.nSuperCells();
-        ++superCelli
-    )
-    {
-        const DynamicList<particleType*>& cellParticles =
-            cellParticlesInSuperCell[superCelli];
-
-        scalar sumWt    = 0.0;
-        scalar sumPhiWt = 0.0;
-
-        for (particleType* pPtr : cellParticles)
-        {
-            if (filterFlagged && pPtr->secondCondFlag() != 1) continue;
-
-            const scalar w = pPtr->wt();
-            sumWt    += w;
-            sumPhiWt += w * pPtr->phiModified();
-        }
-
-        if (sumWt > SMALL)
-        {
-            const scalar mean = sumPhiWt/sumWt;
-            for (const label celli : superCellCells[superCelli])
-                pm[celli] = mean;
-        }
-    }
-}
-
 
 template <class CloudType>
 void Foam::KernelEstimation<CloudType>::buildParticleList()
@@ -198,8 +125,10 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
         //- Coupling(state) Variables
         forAll(iter().XiC(), j)
         {
-            // In phi-degree mode the carrier slot holds phiModified() so the
-            // kd-tree conditions on the modified progress variable.
+            // In phi-degree mode the conditioning slot (phiModEul) takes the
+            // particle's phiModified() member, so the kd-tree conditions on the
+            // current modified progress variable (the phiModEul XiC slot itself
+            // is not carried on the particle).
             const scalar val =
                 (phiModEnabled_ && j == condSlotXiC_)
               ? iter().phiModified()
@@ -266,10 +195,10 @@ void Foam::KernelEstimation<CloudType>::computeTargets
     const label CVIndexinXiC = nXiCs_ + condSlotXiC_;
     const label CVIndexinXi  = condSlotXi_;
 
-    //- LES field of the conditioning variable: the projected phi-degree field
-    //- in phi-degree mode, otherwise the registered Eulerian coupling field.
-    const volScalarField& f =
-        phiModEnabled_ ? phiModCell_() : XiC.Vars(CVIndexinXi).field();
+    //- LES field of the conditioning variable (the registered Eulerian field;
+    //- in phi-degree mode this is the transported "phiModEul" field, relaxed
+    //- toward the particle phi-degree in XiEqn).
+    const volScalarField& f = XiC.Vars(CVIndexinXi).field();
 
     //- Min and Max values of the conditioning variable
     scalar minf = min(f.primitiveField());
@@ -713,9 +642,7 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     condSlotXiC_(0),
 
-    condSlotXi_(0),
-
-    phiModCell_(nullptr)
+    condSlotXi_(0)
 {
     forAll(this->solveEqvSpecie(), i)
     {
@@ -746,23 +673,30 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     // Optional conditioning on the modified progress variable phi-degree.
     // Triggered by a dedicated switch, NOT by condVariable: cVarName() must stay
-    // a real registered coupling variable because other models consume it too
+    // a real coupling variable because other models consume it too
     // (ReactingPopeParticle passes XiC(cVarName()) to the chemistry as the
-    // mixture fraction; FlameletCurves looks it up likewise), and a non-coupling
-    // name throws "<name> not found in table". phi-degree has no coupling slot of
-    // its own, so the conditioning coupling variable's slot (cVarName(), e.g. z)
-    // is reused to carry the per-cell/particle phi-degree, projected each step
-    // (buildPhiModCell()).
+    // mixture fraction). When enabled, the kernel conditions on the registered
+    // Eulerian "phiModEul" field - a non-passive couplingVar that XiEqn relaxes
+    // toward the particle-projected phi-degree - while the particle coordinate is
+    // read from the phiModified() member (see buildParticleList).
     phiModEnabled_ =
         this->coeffDict().lookupOrDefault("conditionOnPhiModified", false);
 
-    condSlotXiC_ = this->XiC().cVarInXiC()[this->cVarName()];
-    condSlotXi_  = this->XiC().cVarInXi()[this->cVarName()];
+    if (phiModEnabled_ && !this->XiC().cVarInXiC().found("phiModEul"))
+        FatalErrorInFunction
+            << "conditionOnPhiModified requires a 'phiModEul' couplingVar in "
+            << "mmcVariablesDefinitions (the Eulerian phi-degree field)." << nl
+            << exit(FatalError);
+
+    const word condName =
+        phiModEnabled_ ? word("phiModEul") : this->cVarName();
+
+    condSlotXiC_ = this->XiC().cVarInXiC()[condName];
+    condSlotXi_  = this->XiC().cVarInXi()[condName];
 
     if (phiModEnabled_)
-        Info<< "KernelEstimation: conditioning on phiModified (phi-degree); "
-            << "reusing coupling variable '" << this->cVarName()
-            << "' as the carrier slot" << endl;
+        Info<< "KernelEstimation: conditioning on the Eulerian phi-degree "
+            << "field 'phiModEul'" << endl;
 }
 
 
@@ -782,11 +716,6 @@ void Foam::KernelEstimation<CloudType>::EqvETargetValues
     volScalarField& TEqvETarget
 )
 {
-    //- In phi-degree mode, project the flagged particles' phi-degree onto the
-    //- mesh first: it is the per-cell conditioning coordinate the kernel needs.
-    if (phiModEnabled_)
-        buildPhiModCell();
-
     //- Create lists
     buildParticleList();
 

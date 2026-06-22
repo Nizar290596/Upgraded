@@ -216,12 +216,14 @@ thermophysicalCoupling
 {
     // condVariable must be a registered coupling variable (e.g. z = mixture
     // fraction). It is also consumed by the reaction model (passed to the
-    // chemistry) and others, so it must NOT be set to a non-coupling name such
-    // as phiModified. To condition KernelEstimation on the reaction-progress
-    // variable phi-degree instead, keep condVariable z here and set
+    // chemistry), so it must NOT be set to a non-coupling name such as
+    // phiModified. To condition KernelEstimation on the reaction-progress
+    // variable phi-degree instead: keep condVariable z here, set
     //   conditionOnPhiModified true;
-    // in KernelEstimationCoeffs (it reuses this coupling variable's array slot
-    // to carry the phi-degree projected from the flagged subset).
+    // in KernelEstimationCoeffs, and add a non-passive "phiModEul" couplingVar
+    // to mmcVariablesDefinitions. XiEqn relaxes that Eulerian field toward the
+    // particle-projected phi-degree and the kernel conditions on it. (Needs
+    // second conditioning enabled so phi-degree evolves.)
 
     CH3OCH3;
     CH3OCH2O2;

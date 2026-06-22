@@ -31,6 +31,20 @@ variables
         MMCType         couplingVar;
     }
 
+    // Eulerian phi-degree (modified progress variable) for KernelEstimation
+    // conditioning (conditionOnPhiModified). NON-passive: phi-degree has no
+    // physical boundary conditions, so XiEqn relaxes this field toward the
+    // particle-projected phi-degree (see XiEqn.H) rather than transporting it
+    // from BCs like z. Only needed when conditionOnPhiModified is enabled.
+    phiModEul
+    {
+        name            phiModEul;
+        couplingName    phiModEul;
+        passive         false;
+        mixStep         1;
+        MMCType         couplingVar;
+    }
+
     sPx
     {
         name            sPx;
