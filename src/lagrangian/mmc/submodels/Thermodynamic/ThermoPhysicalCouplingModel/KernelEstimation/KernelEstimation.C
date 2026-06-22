@@ -328,8 +328,23 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             pList[i] =std::move(temp);
         }
 
-        //- Construct kd-Tree of particle list
-        kdTree<List<scalar>> particleTree(pList,wts); // 4 dimensions for kdtree x,y,z,XiC
+        //- Construct kd-Tree of particle list.
+        //  Guard against an empty list: with the second-conditioning subset
+        //  active a processor (plus its gathered neighbours) can hold zero
+        //  flagged particles. The kdTree constructor dereferences particles_[0]
+        //  (kdTree.C), so building it on an empty list segfaults this rank,
+        //  which then surfaces as an MPI/InfiniBand collective timeout on its
+        //  peers (e.g. in Cloud::move's reduceOr). Skip the kernel when empty;
+        //  cells stay uncoupled (Indicator==0) and the collective coverage
+        //  diagnostic below still runs on every rank, preserving balance.
+        const bool haveParticles = !pList.empty();
+
+        autoPtr<kdTree<List<scalar>>> particleTreePtr;
+        if (haveParticles)
+            particleTreePtr.reset
+            (
+                new kdTree<List<scalar>>(pList, wts) // 4 dims: x,y,z,condVar
+            );
 
         //Sort LES list based on distance from origin
         std::sort(iterL2,iterU2,lessArg(nDist_));
@@ -356,6 +371,12 @@ void Foam::KernelEstimation<CloudType>::computeTargets
     //- Start computation of Cell target values
     forAllIter(DynamicList<densParticle*>,LESPtrList,LESi)
     {
+        //- No (flagged) particles on this rank (+neighbours): leave every cell
+        //  uncoupled. Break out; the collective coverage diagnostic after the
+        //  loop still runs on all ranks, so collective balance is preserved.
+        if (!haveParticles)
+            break;
+
         scalar fLES  = (**LESi)[CVIndexinXiC];
 
         label celli  = (**LESi)[nI_];
@@ -389,7 +410,7 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             qv[2] = cCentre[2];
             qv[3] = fLES;
 
-            auto result = particleTree.nNearest
+            auto result = particleTreePtr().nNearest
             (
                 qv,             // query vector (x,y,z,XiC)
                 nn              // number of nearest neighbours
