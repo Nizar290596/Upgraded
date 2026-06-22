@@ -214,12 +214,14 @@ subModels
 //       to e.g. KernelEstimationCoeffs
 thermophysicalCoupling
 {
-    // condVariable selects the conditioning variable for the coupling kernel:
-    //   z / f       -> resolved mixture fraction (default)
-    //   phiModified -> reaction-progress variable phi-degree. KernelEstimation
-    //                  projects the flagged particles' phi-degree onto the mesh
-    //                  and conditions on it; set fLow/fHigh to the phi-degree
-    //                  band. (phi-degree has no Eulerian field of its own.)
+    // condVariable must be a registered coupling variable (e.g. z = mixture
+    // fraction). It is also consumed by the reaction model (passed to the
+    // chemistry) and others, so it must NOT be set to a non-coupling name such
+    // as phiModified. To condition KernelEstimation on the reaction-progress
+    // variable phi-degree instead, keep condVariable z here and set
+    //   conditionOnPhiModified true;
+    // in KernelEstimationCoeffs (it reuses this coupling variable's array slot
+    // to carry the phi-degree projected from the flagged subset).
 
     CH3OCH3;
     CH3OCH2O2;

@@ -745,27 +745,24 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
     Info << "maximum rMax is: " << rMaxMax_ << endl;
 
     // Optional conditioning on the modified progress variable phi-degree.
-    // phi-degree (phiModified) is a particle-only quantity with no Eulerian
-    // field, so the first registered coupling variable's array slot is reused
-    // as the carrier for the conditioning value and a per-cell phi-degree is
-    // projected from the flagged particles each step (buildPhiModCell()).
-    phiModEnabled_ = (this->cVarName() == "phiModified");
+    // Triggered by a dedicated switch, NOT by condVariable: cVarName() must stay
+    // a real registered coupling variable because other models consume it too
+    // (ReactingPopeParticle passes XiC(cVarName()) to the chemistry as the
+    // mixture fraction; FlameletCurves looks it up likewise), and a non-coupling
+    // name throws "<name> not found in table". phi-degree has no coupling slot of
+    // its own, so the conditioning coupling variable's slot (cVarName(), e.g. z)
+    // is reused to carry the per-cell/particle phi-degree, projected each step
+    // (buildPhiModCell()).
+    phiModEnabled_ =
+        this->coeffDict().lookupOrDefault("conditionOnPhiModified", false);
 
-    if (phiModEnabled_ && this->XiCNames().empty())
-        FatalErrorInFunction
-            << "condVariable 'phiModified' requires at least one registered "
-            << "coupling variable to carry the conditioning slot." << nl
-            << exit(FatalError);
-
-    const word condName =
-        phiModEnabled_ ? this->XiCNames()[0] : this->cVarName();
-
-    condSlotXiC_ = this->XiC().cVarInXiC()[condName];
-    condSlotXi_  = this->XiC().cVarInXi()[condName];
+    condSlotXiC_ = this->XiC().cVarInXiC()[this->cVarName()];
+    condSlotXi_  = this->XiC().cVarInXi()[this->cVarName()];
 
     if (phiModEnabled_)
-        Info<< "KernelEstimation: conditioning on phiModified (phi-degree), "
-            << "carrier coupling slot '" << condName << "'" << endl;
+        Info<< "KernelEstimation: conditioning on phiModified (phi-degree); "
+            << "reusing coupling variable '" << this->cVarName()
+            << "' as the carrier slot" << endl;
 }
 
 

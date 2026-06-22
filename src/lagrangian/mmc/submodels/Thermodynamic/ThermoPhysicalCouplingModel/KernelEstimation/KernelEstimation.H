@@ -148,8 +148,9 @@ class KernelEstimation
         Switch debug_;
 
         //- Condition on the modified progress variable phi-degree (a
-        //  particle-only quantity) instead of a registered Eulerian coupling
-        //  field. Enabled when condVariable == "phiModified".
+        //  particle-only quantity) instead of the coupling field. Enabled by the
+        //  KernelEstimationCoeffs switch "conditionOnPhiModified"; condVariable
+        //  stays a real coupling variable and is reused as the carrier slot.
         bool phiModEnabled_;
 
         //- Array slot of the carrier coupling variable whose position is reused
