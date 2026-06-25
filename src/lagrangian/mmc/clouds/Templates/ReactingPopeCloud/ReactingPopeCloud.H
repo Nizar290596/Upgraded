@@ -192,6 +192,12 @@ class ReactingPopeCloud
 
         //- Update Eulerian statistics
         virtual void updateEulerianStatistics();
+
+        //- With load-balanced chemistry the reaction is applied after solve()
+        //  (BalanceReactModel::SreactBalance), so defer statistics sampling out
+        //  of solve() to there - otherwise solve() samples the pre-reaction
+        //  (post-mixing) particle temperature.
+        virtual bool sampleStatisticsInSolve() const { return !balanceReactionLoad_; }
         
         virtual void writeFields() const;
 

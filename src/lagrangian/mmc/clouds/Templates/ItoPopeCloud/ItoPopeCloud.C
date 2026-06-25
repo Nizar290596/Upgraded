@@ -500,8 +500,9 @@ void Foam::ItoPopeCloud<CloudType>::solve
 
     this->move(cloud,td);
 
-    this->updateEulerianStatistics();
-    
+    if (this->sampleStatisticsInSolve())
+        this->updateEulerianStatistics();
+
     label numParticles=this->size();
     td.reportCounters(numParticles);
     
