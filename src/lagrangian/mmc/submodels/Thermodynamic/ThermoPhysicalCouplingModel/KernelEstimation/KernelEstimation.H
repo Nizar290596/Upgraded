@@ -125,6 +125,9 @@ class KernelEstimation
         const scalar fm_;
         const scalar rMaxMax_;
 
+        //- Number of nearest neighbours used to build each cell kernel
+        const label nNearest_;
+
         DynamicList<densParticle>  particleList_;
         DynamicList<densParticle>  LESList_;
 
@@ -143,6 +146,18 @@ class KernelEstimation
         const scalar C2_;
 
         Switch debug_;
+
+        //- Condition on the modified progress variable phi-degree instead of the
+        //  mixture fraction. Enabled by the KernelEstimationCoeffs switch
+        //  "conditionOnPhiModified"; the kernel then conditions on the registered
+        //  Eulerian "phiModEul" field (relaxed toward the particle phi-degree in
+        //  XiEqn), with the particle coordinate taken from phiModified().
+        bool phiModEnabled_;
+
+        //- Slot of the conditioning coupling variable (cVarName(), or "phiModEul"
+        //  in phi-degree mode) in the XiC subset and the full Xi set.
+        label condSlotXiC_;
+        label condSlotXi_;
 
         void buildParticleList();
         void buildLESParticleList();

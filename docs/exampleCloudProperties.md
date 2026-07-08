@@ -155,7 +155,11 @@ subModels
         dfMax               0.015;  // maximum distance in f space allowed to do extrapolation
         C2                  0.1;    // used to control resolution
 
-        nElements           25;
+        nNearest            20;     // k nearest particles per cell kernel (default 20)
+        rMax                1e9;    // cap on physical kernel radius [m] (default 1e9)
+
+        // With second conditioning enabled the kernel is built from the flagged
+        // subset only; fLow/fHigh must bracket that subset's mixture-fraction band.
     }
 
 
@@ -210,6 +214,17 @@ subModels
 //       to e.g. KernelEstimationCoeffs
 thermophysicalCoupling
 {
+    // condVariable must be a registered coupling variable (e.g. z = mixture
+    // fraction). It is also consumed by the reaction model (passed to the
+    // chemistry), so it must NOT be set to a non-coupling name such as
+    // phiModified. To condition KernelEstimation on the reaction-progress
+    // variable phi-degree instead: keep condVariable z here, set
+    //   conditionOnPhiModified true;
+    // in KernelEstimationCoeffs, and add a non-passive "phiModEul" couplingVar
+    // to mmcVariablesDefinitions. XiEqn relaxes that Eulerian field toward the
+    // particle-projected phi-degree and the kernel conditions on it. (Needs
+    // second conditioning enabled so phi-degree evolves.)
+
     CH3OCH3;
     CH3OCH2O2;
     CH3OCHO;

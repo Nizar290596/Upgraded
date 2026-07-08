@@ -331,7 +331,14 @@ void Foam::BalanceReactModel<CloudType>::SreactBalance()
         k++;
     }
     
-    updateTotalCpuTime(reactParList); 
+    updateTotalCpuTime(reactParList);
+
+    // Chemistry is complete and the post-reaction particle state (T, hA, Y) has
+    // been written back above. Sample the Eulerian statistics now: under load-
+    // balanced chemistry the cloud's solve() runs BEFORE this reaction and skips
+    // sampling (sampleStatisticsInSolve() == false), so doing it here captures
+    // the post-reaction temperature rather than the pre-reaction (mixed) value.
+    this->owner().updateEulerianStatistics();
 }
 
 template <class CloudType>

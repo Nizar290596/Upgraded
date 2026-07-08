@@ -66,17 +66,41 @@ subModels
     printMoleFractions false;
     
     thermoPhysicalCouplingModel FlameletCurves;
-    //thermoPhysicalCouplingModel KernelEstimation; // Under development
-    
+    //thermoPhysicalCouplingModel KernelEstimation;
+    //
+    // NOTE: this case runs the mixing-model test harness (application test.exe),
+    // not SPFoam, so the coupling block below is NOT exercised at run time — it is
+    // a reference configuration. Copy it into an SPFoam case to use it.
+
     KernelEstimationCoeffs
     {
-        fLow                0.03;   //lower flamability limit
-        fHigh               0.19;   //upper flamability limit
-        fm                  0.01;   //same as in mixing model
-        
-        condVariable        f;
-        dfMax               0.0075; //Maximum distance in f space allowed to do extrapolation            
-        C2                  0.1;    //used to control resolution
+        // --- k-NN kernel controls (apply in either conditioning mode) ---
+        nNearest            20;     // flagged particles per cell kernel (default 20)
+        rMax                1e9;    // physical kernel-radius cap [m] (1e9 = uncapped)
+        dfMax               0.0;    // 0 -> always recompute (no extrapolation reuse; safest)
+        C2                  0.1;    // extrapolation resolution control
+        debug               false;
+
+        // --- Conditioning band, in the units of condVariable
+        //     (condVariable is set in the thermophysicalCoupling dict below) ---
+
+        // (a) condVariable z  (mixture fraction) - no second conditioning needed:
+        fLow                0.03;   // lower flammability limit
+        fHigh               0.19;   // upper flammability limit
+        fm                  0.01;   // conditioning-space bandwidth (acceptance window = +/-0.5*fm)
+
+        // (b) phi-degree conditioning - keep condVariable a coupling variable
+        //     (z) and add  conditionOnPhiModified true;  here (do NOT set
+        //     condVariable phiModified - it is also used by the chemistry and
+        //     would throw "phiModified not found in table"). Also add a
+        //     non-passive "phiModEul" couplingVar to mmcVariablesDefinitions:
+        //     XiEqn relaxes that Eulerian field toward the particle-projected
+        //     phi-degree (phi*exp(beta*omegaOU) ~ [0, ~1.6]) and the kernel
+        //     conditions on it. Use a phi-degree band + wider bandwidth, e.g.
+        //     with beta = 0.15:
+        //         conditionOnPhiModified true;  fLow 0.0;  fHigh 2.0;  fm 0.3;
+        //     Requires second conditioning enabled. Watch the
+        //     "KernelEstimation coupling: X/Y cells covered" line to tune fm.
     }
 
     mixingModel	    MMCcurl;

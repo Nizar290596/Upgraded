@@ -350,6 +350,13 @@ class ItoPopeCloud
 
             //- Update Eulerian statistics
             virtual void updateEulerianStatistics();
+
+            //- Whether Eulerian statistics are sampled inside solve(). Reacting
+            //  clouds with load-balanced chemistry override this to false: solve()
+            //  runs before the deferred reaction, so sampling there would capture
+            //  the pre-reaction (post-mixing) temperature. They sample after the
+            //  reaction instead (BalanceReactModel::SreactBalance).
+            virtual bool sampleStatisticsInSolve() const { return true; }
             
             virtual void writeFields() const;
             

@@ -66,6 +66,12 @@ flowchart TD
    with `tauRel` blending from `tauRelaxStart` toward `tauRelaxTarget` (linear in time-step count, see `XiEqn.H`).
 3. The updated Eulerian `U`, `rho`, `DEff`, `gradRho` are passed back to the cloud through the constructor references and used to advance the particles in the next step.
 
+`EqvETargetValues` is supplied by the selected `thermoPhysicalCouplingModel`:
+
+- **`ParticleInCell`** — local: averages particles within each super-cell; `Indicator=0` (source off) wherever a super-cell holds no contributing particle.
+- **`KernelEstimation`** — non-local: for each cell it kernel-weights the `nNearest` particles in (x, y, z, conditioning-variable) space, so cells without a local particle still receive a target. This suits the second-conditioning **flagged subset** (sparse particles): the subset filter keeps every flagged particle (no down-sampling), so coverage (`Indicator=1`) stays high; `Indicator=0` only outside `[fLow, fHigh]` or where the kernel has no support. Set `fLow/fHigh` to bracket the flagged subset's conditioning-variable band.
+  - **Conditioning variable.** By default the kernel conditions on the resolved mixture fraction. `condVariable` must stay a **registered coupling variable** (e.g. `z`) — it is also consumed by the reaction model (passed to the chemistry), so it must not be a non-coupling name. To condition on the reaction-progress variable φ° instead, keep `condVariable z`, set `conditionOnPhiModified true` in `KernelEstimationCoeffs`, and add a **non-passive `phiModEul` `couplingVar`** to `mmcVariablesDefinitions`. φ° has no physical boundary conditions, so (unlike the passive `z`) `XiEqn` relaxes the Eulerian `phiModEul` field toward the particle-projected φ° where the flagged subset has support and lets transport/diffusion fill the rest. The kernel then conditions cells on that transported `phiModEul` field and particles on their `phiModified()` member. Requires second conditioning enabled (so φ° actually evolves).
+
 ## MMC reference variables
 
 Defined in `mmcVariablesDefinitions`:

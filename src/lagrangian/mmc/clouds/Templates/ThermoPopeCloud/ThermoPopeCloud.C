@@ -398,6 +398,18 @@ void Foam::ThermoPopeCloud<CloudType,ReactionThermo>::updateEulerianStatistics()
 
     forAllIters(*this, iter)
     {
+        // Sample only the second-conditioning subset: these are the particles
+        // that integrate chemistry (ReactingPopeParticle) and that the
+        // KernelEstimation coupling conditions on, so they - not the full cloud
+        // - define the Eulerian fields. Averaging the complementary, non-
+        // reacting particles into the thermochemical statistics biases them
+        // toward the unreacted (cold) state, so the time-averaged temperature
+        // falls well below the instantaneous Eulerian field. Inert when second
+        // conditioning is off (secondCondMixingEnabled() == false; base
+        // particle secondCondFlag() == 0).
+        if (this->secondCondMixingEnabled() && iter().secondCondFlag() != 1)
+            continue;
+
         this->eulerianStats().findCell(iter().position());
 
         if (this->eulerianStatsDict().found("T"))
