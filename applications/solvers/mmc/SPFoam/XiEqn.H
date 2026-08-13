@@ -67,6 +67,15 @@ forAll(Xi, XiI)
                     const bool filterFlagged =
                         pSets.first().secondCondMixingEnabled();
 
+                    // Same switch the KernelEstimation coupling reads: project
+                    // the clean progress variable phi() when conditionOnPhi is
+                    // set, else the OU-modulated phi-degree phiModified(). Read
+                    // from the coupling coeffDict so the Eulerian phiModEul field
+                    // and the kernel's particle coordinate stay consistent.
+                    const bool condOnPhi =
+                        pSets.first().coupling().coeffDict()
+                            .lookupOrDefault<Switch>("conditionOnPhi", false);
+
                     forAllIters(pSets.first(), iter)
                     {
                         if (filterFlagged && iter().secondCondFlag() != 1)
@@ -76,7 +85,8 @@ forAll(Xi, XiI)
                         const scalar w = iter().m();
 
                         sumWt[celli]    += w;
-                        sumPhiWt[celli] += w * iter().phiModified();
+                        sumPhiWt[celli] +=
+                            w * (condOnPhi ? iter().phi() : iter().phiModified());
                     }
 
                     forAll(tgt, celli)

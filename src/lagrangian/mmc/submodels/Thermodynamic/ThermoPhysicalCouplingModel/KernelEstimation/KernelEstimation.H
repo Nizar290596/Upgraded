@@ -154,6 +154,14 @@ class KernelEstimation
         //  XiEqn), with the particle coordinate taken from phiModified().
         bool phiModEnabled_;
 
+        //- Within phiModEul mode, condition on the clean progress variable
+        //  phi() rather than the OU-modulated phi-degree phiModified().
+        //  Enabled by the KernelEstimationCoeffs switch "conditionOnPhi".
+        //  The particle coordinate (buildParticleList) and the Eulerian
+        //  phiModEul relaxation target (XiEqn) both read this same switch so
+        //  the field and the coordinate stay consistent.
+        bool condOnPhi_;
+
         //- Slot of the conditioning coupling variable (cVarName(), or "phiModEul"
         //  in phi-degree mode) in the XiC subset and the full Xi set.
         label condSlotXiC_;

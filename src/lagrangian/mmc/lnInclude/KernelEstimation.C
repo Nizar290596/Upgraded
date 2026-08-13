@@ -60,6 +60,9 @@ void Foam::KernelEstimation<CloudType>::buildLESParticleList()
 
         forAllConstIter(wordList,this->XiCNames(), nameI)
         {
+            // In phi-degree mode the conditioning slot is "phiModEul", whose
+            // field is the transported Eulerian phi-degree (relaxed toward the
+            // particle projection in XiEqn) - used here via the normal lookup.
             p[nXiCs_ +  pfieldIndexes[*nameI]] =
                 this->XiC().Vars(fieldIndexes[*nameI]).field()[celli];
         }
@@ -73,15 +76,22 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
 {
     particleList_.clear();
 
-    scalar nParticles = this->owner().size();
-    scalar nLESCells  = mesh_.cells().size();
-    scalar prob       = 1. - (0.5*nLESCells/nParticles);
+    const bool filterFlagged = this->owner().secondCondMixingEnabled();
+
+    // Down-sampling (to ~0.5*nCells particles) is only applied to the full
+    // cloud. With the second-conditioning subset active EVERY flagged particle
+    // is kept: the subset is already reduced and thinning it would re-introduce
+    // the sparse coupling holes we are trying to avoid.
+    const scalar nParticles = this->owner().size();
+    const scalar nLESCells  = mesh_.cells().size();
+    const bool   subSample  = (!filterFlagged) && (nParticles > nLESCells);
+    const scalar prob       = subSample ? 1. - (0.5*nLESCells/nParticles) : 0.0;
 
     forAllIters(this->owner(), iter)
     {
 		// When second conditioning is active, exclude non-subset particles —
         // their Y and T are stale and must not bias the Eulerian target fields.
-        if (this->owner().secondCondMixingEnabled() && iter().secondCondFlag() != 1)
+        if (filterFlagged && iter().secondCondFlag() != 1)
             continue;
 		
         densParticle p(numP_);
@@ -115,16 +125,27 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
         //- Coupling(state) Variables
         forAll(iter().XiC(), j)
         {
-            p[nXiCs_ + j] = iter().XiC()[j];
-            maxXiCVal_[j] = max(maxXiCVal_[j],iter().XiC()[j]);
-            minXiCVal_[j] = min(minXiCVal_[j],iter().XiC()[j]);
+            // In phiModEul mode the conditioning slot takes a particle
+            // progress-variable member so the kd-tree conditions on it (the
+            // phiModEul XiC slot itself is not carried on the particle):
+            //   condOnPhi_ == false -> phiModified() (OU-modulated phi-degree)
+            //   condOnPhi_ == true  -> phi()         (clean progress variable)
+            scalar val;
+            if (phiModEnabled_ && j == condSlotXiC_)
+                val = condOnPhi_ ? iter().phi() : iter().phiModified();
+            else
+                val = iter().XiC()[j];
+
+            p[nXiCs_ + j] = val;
+            maxXiCVal_[j] = max(maxXiCVal_[j], val);
+            minXiCVal_[j] = min(minXiCVal_[j], val);
         }
 
         //- Min and Max of temperature
         maxVal_[numYEqv_] = max(maxVal_[numYEqv_],iter().T());
         minVal_[numYEqv_] = min(minVal_[numYEqv_],iter().T());
 
-        if(nParticles > nLESCells)
+        if (subSample)
         {
             if (this->owner().rndGen().Random() >= prob)
                 particleList_.append(p);
@@ -171,17 +192,22 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             N2Index = specieI;
     }
 
-    //- Index of coupling variable used
-        const label CVIndexinXiC = nXiCs_ + XiC.cVarInXiC()[this->cVarName()];
+    //- Index of conditioning variable used (carrier slot; in phi-degree mode
+    //- the first coupling variable's slot carries the conditioning value)
+    const label CVIndexinXiC = nXiCs_ + condSlotXiC_;
+    const label CVIndexinXi  = condSlotXi_;
 
-    //- Min and Max values of the coupling variable
-    const label CVIndexinXi = XiC.cVarInXi()[this->cVarName()];
+    //- LES field of the conditioning variable (the registered Eulerian field;
+    //- in phi-degree mode this is the transported "phiModEul" field, relaxed
+    //- toward the particle phi-degree in XiEqn).
+    const volScalarField& f = XiC.Vars(CVIndexinXi).field();
 
-    scalar minf = min(XiC.Vars(CVIndexinXi).field().primitiveField());
-    scalar maxf = max(XiC.Vars(CVIndexinXi).field().primitiveField());
+    //- Min and Max values of the conditioning variable
+    scalar minf = min(f.primitiveField());
+    scalar maxf = max(f.primitiveField());
 
-    scalar minz = minXiCVal_[XiC.cVarInXiC()[this->cVarName()]];
-    scalar maxz = maxXiCVal_[XiC.cVarInXiC()[this->cVarName()]];
+    scalar minz = minXiCVal_[condSlotXiC_];
+    scalar maxz = maxXiCVal_[condSlotXiC_];
 
     if (debug_)
         Info << "max and min values of couplingVar in LES are: "
@@ -233,8 +259,23 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             pList[i] =std::move(temp);
         }
 
-        //- Construct kd-Tree of particle list
-        kdTree<List<scalar>> particleTree(pList,wts); // 4 dimensions for kdtree x,y,z,XiC
+        //- Construct kd-Tree of particle list.
+        //  Guard against an empty list: with the second-conditioning subset
+        //  active a processor (plus its gathered neighbours) can hold zero
+        //  flagged particles. The kdTree constructor dereferences particles_[0]
+        //  (kdTree.C), so building it on an empty list segfaults this rank,
+        //  which then surfaces as an MPI/InfiniBand collective timeout on its
+        //  peers (e.g. in Cloud::move's reduceOr). Skip the kernel when empty;
+        //  cells stay uncoupled (Indicator==0) and the collective coverage
+        //  diagnostic below still runs on every rank, preserving balance.
+        const bool haveParticles = !pList.empty();
+
+        autoPtr<kdTree<List<scalar>>> particleTreePtr;
+        if (haveParticles)
+            particleTreePtr.reset
+            (
+                new kdTree<List<scalar>>(pList, wts) // 4 dims: x,y,z,condVar
+            );
 
         //Sort LES list based on distance from origin
         std::sort(iterL2,iterU2,lessArg(nDist_));
@@ -244,9 +285,6 @@ void Foam::KernelEstimation<CloudType>::computeTargets
 
     //- Field with cell centres
     vectorField cellCentres = mesh_.C().internalField();
-
-    //- LES field of coupling variable
-    const volScalarField& f = XiC.Vars(CVIndexinXi).field();//
 
     volVectorField gradf = fvc::grad(f);
 
@@ -264,6 +302,12 @@ void Foam::KernelEstimation<CloudType>::computeTargets
     //- Start computation of Cell target values
     forAllIter(DynamicList<densParticle*>,LESPtrList,LESi)
     {
+        //- No (flagged) particles on this rank (+neighbours): leave every cell
+        //  uncoupled. Break out; the collective coverage diagnostic after the
+        //  loop still runs on all ranks, so collective balance is preserved.
+        if (!haveParticles)
+            break;
+
         scalar fLES  = (**LESi)[CVIndexinXiC];
 
         label celli  = (**LESi)[nI_];
@@ -289,7 +333,7 @@ void Foam::KernelEstimation<CloudType>::computeTargets
         if (mag(df) >= DELTAf || dd >= DELTAd || computedLES == 0)
         {
             //- Find the k-nn particles to compute kernel !!!!!!!!
-            label nn = 20;//50;
+            const label nn = nNearest_;
             scalarList qv(4); //coupling var + 3 dimensions
 
             qv[0] = cCentre[0];
@@ -297,11 +341,19 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             qv[2] = cCentre[2];
             qv[3] = fLES;
 
-            auto result = particleTree.nNearest
+            auto result = particleTreePtr().nNearest
             (
                 qv,             // query vector (x,y,z,XiC)
                 nn              // number of nearest neighbours
             );
+
+            // The tree returns at most nn neighbours (fewer when the flagged
+            // subset is smaller than nn); guard against an empty/short result
+            // before sizing the kernel from result.begin() and looping.
+            if (result.empty())
+                continue;
+
+            const label nFound = min(nn, label(result.size()));
 
             //- Define kernel radius in physical space based on k-NN
 
@@ -328,7 +380,7 @@ void Foam::KernelEstimation<CloudType>::computeTargets
             scalar alpha   = 1.0/6.0/h;
             scalar alpha2  = alpha/(0.5*h);
 
-            for(label nni = 0; nni < nn; nni++)
+            for(label nni = 0; nni < nFound; nni++)
             {
                 const densParticle& p = particleList_(result[nni].idx);
 
@@ -493,6 +545,22 @@ void Foam::KernelEstimation<CloudType>::computeTargets
     YEqvETarget[N2Index] = scalar(1) - Yt;
     YEqvETarget[N2Index].max(0.0);
 
+    // Coupling-coverage diagnostic: fraction of cells that received a Lagrangian
+    // target (Indicator==1). With the kernel estimator this should stay high even
+    // for the sparse flagged subset, unlike ParticleInCell which leaves a hole
+    // wherever a flagged particle is absent from the cell.
+    {
+        const scalar nCov =
+            returnReduce(sum(this->Indicator().primitiveField()), sumOp<scalar>());
+        const label nTot =
+            returnReduce(this->Indicator().size(), sumOp<label>());
+        const label nP = returnReduce(particleList_.size(), sumOp<label>());
+
+        Info<< "KernelEstimation coupling: " << label(nCov) << "/" << nTot
+            << " cells covered (" << 100.0*nCov/max(nTot, 1) << "%), "
+            << nP << " particles in kernel list" << endl;
+    }
+
     if (debug_)
     {
         Pstream::gather(computedLES,sumOp<label>());
@@ -546,6 +614,8 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     rMaxMax_(this->coeffDict().lookupOrDefault("rMax", 1.0e9)),
 
+    nNearest_(this->coeffDict().lookupOrDefault("nNearest", label(20))),
+
     particleList_(),
 
     LESList_(),
@@ -568,7 +638,15 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     C2_(readScalar(this->coeffDict().lookup("C2"))),
 
-    debug_(this->coeffDict().lookupOrDefault("debug",false)) //Define from dictionary
+    debug_(this->coeffDict().lookupOrDefault("debug",false)), //Define from dictionary
+
+    phiModEnabled_(false),
+
+    condOnPhi_(false),
+
+    condSlotXiC_(0),
+
+    condSlotXi_(0)
 {
     forAll(this->solveEqvSpecie(), i)
     {
@@ -596,6 +674,48 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
              << "The indices of the equivalents species are: "
              << Yindexes_ << endl;
     Info << "maximum rMax is: " << rMaxMax_ << endl;
+
+    // Optional conditioning on the modified progress variable phi-degree.
+    // Triggered by a dedicated switch, NOT by condVariable: cVarName() must stay
+    // a real coupling variable because other models consume it too
+    // (ReactingPopeParticle passes XiC(cVarName()) to the chemistry as the
+    // mixture fraction). When enabled, the kernel conditions on the registered
+    // Eulerian "phiModEul" field - a non-passive couplingVar that XiEqn relaxes
+    // toward the particle-projected phi-degree - while the particle coordinate is
+    // read from the phiModified() member (see buildParticleList).
+    phiModEnabled_ =
+        this->coeffDict().lookupOrDefault("conditionOnPhiModified", false);
+
+    if (phiModEnabled_ && !this->XiC().cVarInXiC().found("phiModEul"))
+        FatalErrorInFunction
+            << "conditionOnPhiModified requires a 'phiModEul' couplingVar in "
+            << "mmcVariablesDefinitions (the Eulerian phi-degree field)." << nl
+            << exit(FatalError);
+
+    const word condName =
+        phiModEnabled_ ? word("phiModEul") : this->cVarName();
+
+    condSlotXiC_ = this->XiC().cVarInXiC()[condName];
+    condSlotXi_  = this->XiC().cVarInXi()[condName];
+
+    // Optional: within phiModEul mode, condition on the clean progress variable
+    // phi() instead of the OU-modulated phi-degree phiModified(). XiEqn reads the
+    // same switch from this coeffDict when building the phiModEul relaxation
+    // target, so the Eulerian field and the particle coordinate stay consistent.
+    condOnPhi_ = this->coeffDict().lookupOrDefault<Switch>("conditionOnPhi", false);
+
+    if (condOnPhi_ && !phiModEnabled_)
+        FatalErrorInFunction
+            << "conditionOnPhi requires conditionOnPhiModified true (the "
+            << "phiModEul Eulerian field must exist to carry the projection)."
+            << nl << exit(FatalError);
+
+    if (phiModEnabled_)
+        Info<< "KernelEstimation: conditioning on the Eulerian field 'phiModEul' "
+            << "projected from the particle "
+            << (condOnPhi_ ? "phi() (clean progress variable)"
+                           : "phiModified() (OU-modulated phi-degree)")
+            << endl;
 }
 
 

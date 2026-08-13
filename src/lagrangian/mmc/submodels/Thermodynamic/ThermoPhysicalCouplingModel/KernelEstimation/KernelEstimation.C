@@ -125,14 +125,16 @@ void Foam::KernelEstimation<CloudType>::buildParticleList()
         //- Coupling(state) Variables
         forAll(iter().XiC(), j)
         {
-            // In phi-degree mode the conditioning slot (phiModEul) takes the
-            // particle's phiModified() member, so the kd-tree conditions on the
-            // current modified progress variable (the phiModEul XiC slot itself
-            // is not carried on the particle).
-            const scalar val =
-                (phiModEnabled_ && j == condSlotXiC_)
-              ? iter().phiModified()
-              : iter().XiC()[j];
+            // In phiModEul mode the conditioning slot takes a particle
+            // progress-variable member so the kd-tree conditions on it (the
+            // phiModEul XiC slot itself is not carried on the particle):
+            //   condOnPhi_ == false -> phiModified() (OU-modulated phi-degree)
+            //   condOnPhi_ == true  -> phi()         (clean progress variable)
+            scalar val;
+            if (phiModEnabled_ && j == condSlotXiC_)
+                val = condOnPhi_ ? iter().phi() : iter().phiModified();
+            else
+                val = iter().XiC()[j];
 
             p[nXiCs_ + j] = val;
             maxXiCVal_[j] = max(maxXiCVal_[j], val);
@@ -640,6 +642,8 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
 
     phiModEnabled_(false),
 
+    condOnPhi_(false),
+
     condSlotXiC_(0),
 
     condSlotXi_(0)
@@ -694,9 +698,24 @@ Foam::KernelEstimation<CloudType>::KernelEstimation
     condSlotXiC_ = this->XiC().cVarInXiC()[condName];
     condSlotXi_  = this->XiC().cVarInXi()[condName];
 
+    // Optional: within phiModEul mode, condition on the clean progress variable
+    // phi() instead of the OU-modulated phi-degree phiModified(). XiEqn reads the
+    // same switch from this coeffDict when building the phiModEul relaxation
+    // target, so the Eulerian field and the particle coordinate stay consistent.
+    condOnPhi_ = this->coeffDict().lookupOrDefault<Switch>("conditionOnPhi", false);
+
+    if (condOnPhi_ && !phiModEnabled_)
+        FatalErrorInFunction
+            << "conditionOnPhi requires conditionOnPhiModified true (the "
+            << "phiModEul Eulerian field must exist to carry the projection)."
+            << nl << exit(FatalError);
+
     if (phiModEnabled_)
-        Info<< "KernelEstimation: conditioning on the Eulerian phi-degree "
-            << "field 'phiModEul'" << endl;
+        Info<< "KernelEstimation: conditioning on the Eulerian field 'phiModEul' "
+            << "projected from the particle "
+            << (condOnPhi_ ? "phi() (clean progress variable)"
+                           : "phiModified() (OU-modulated phi-degree)")
+            << endl;
 }
 
 
